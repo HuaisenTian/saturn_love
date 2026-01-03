@@ -125,7 +125,7 @@
                 数据流状态: <span id="status-indicator" class="highlight">待机</span>
                 <br><br>
                 > 开普勒轨道: 运行中<br>
-                > 粒子总数: <span id="particle-count-display">120万+</span><br>
+                > 粒子总数: <span id="particle-count-display">80万+</span><br>
                 > 碎石带: <span id="asteroid-count">已加载</span>
             </div>
         </div>
@@ -287,7 +287,6 @@
         let planetGroup;
         let uniforms, starUniforms;
 
-        // 小行星变量
         let asteroidSystemContainer, asteroidTransformGroup;
         let asteroids = [];
 
@@ -296,7 +295,13 @@
 
         let isHandDetected = false;
 
-        // ==================== 手势平滑类 ====================
+        // 鼠标控制变量
+        let isMouseDown = false;
+        let lastMouseX = 0;
+        let lastMouseY = 0;
+        let isMouseActive = false;
+        let mouseTimer = null;
+
         class GestureSmoother {
             constructor(smoothFactor = 0.6, historySize = 3) {
                 this.smoothFactor = smoothFactor;
@@ -380,6 +385,41 @@
             renderer.setClearColor(0x000000, 0);
             container.appendChild(renderer.domElement);
 
+            // 加入鼠标事件监听
+            container.addEventListener('mousedown', (e) => {
+                isMouseDown = true;
+                isMouseActive = true;
+                lastMouseX = e.clientX;
+                lastMouseY = e.clientY;
+                clearTimeout(mouseTimer);
+            });
+
+            window.addEventListener('mousemove', (e) => {
+                if (!isMouseDown) return;
+                const deltaX = e.clientX - lastMouseX;
+                const deltaY = e.clientY - lastMouseY;
+
+                targetRotY += deltaX * 0.005;
+                targetRotX += deltaY * 0.005;
+                targetRotX = Math.max(-1.5, Math.min(1.5, targetRotX));
+
+                lastMouseX = e.clientX;
+                lastMouseY = e.clientY;
+            });
+
+            window.addEventListener('mouseup', () => {
+                isMouseDown = false;
+                mouseTimer = setTimeout(() => { isMouseActive = false; }, 3000);
+            });
+
+            container.addEventListener('wheel', (e) => {
+                isMouseActive = true;
+                targetScale -= e.deltaY * 0.001;
+                targetScale = Math.max(0.15, Math.min(2.5, targetScale));
+                clearTimeout(mouseTimer);
+                mouseTimer = setTimeout(() => { isMouseActive = false; }, 3000);
+            }, { passive: true });
+
             window.addEventListener('resize', () => {
                 camera.aspect = window.innerWidth / window.innerHeight;
                 camera.updateProjectionMatrix();
@@ -408,7 +448,7 @@
         }
 
         // ==========================================================
-        //  修改：initAsteroids - 更复杂的形状和轨道参数
+        //  主要修改：initAsteroids - 增加形态复杂度和轨道逻辑
         // ==========================================================
         function initAsteroids() {
             asteroidSystemContainer = new THREE.Group();
@@ -425,107 +465,94 @@
             const ambientLight = new THREE.AmbientLight(0x404040, 0.5);
             scene.add(ambientLight);
 
-            // 1. 特殊的命名小行星 (尺寸也调小了)
+            // 1. 特殊命名小行星 (降低基础速度)
             const namedAsteroids = [
-                { text: "huaisen", radius: 32, baseSpeed: 0.05, size: 0.2, angle: 0 },
-                { text: "peiyue", radius: 38, baseSpeed: 0.04, size: 0.15, angle: Math.PI }
+                { text: "huaisen", radius: 32, baseSpeed: 0.008, size: 0.22, angle: 0 },
+                { text: "peiyue", radius: 38, baseSpeed: 0.006, size: 0.18, angle: Math.PI }
             ];
 
-            // 2. 生成额外的背景小行星 (形状复杂，轨迹多变)
-            const extraCount = 80;
-            const extraAsteroids = [];
+            // 2. 背景碎石 (增加数量到 160)
+            const extraCount = 160;
+            const allAsteroids = [...namedAsteroids];
             for(let i=0; i<extraCount; i++) {
-                // 随机半径范围 22 - 50
-                const randRadius = 22 + Math.random() * 28;
-
-                extraAsteroids.push({
+                allAsteroids.push({
                     text: null,
-                    radius: randRadius,
-                    // 速度大大降低 (0.01 ~ 0.04)
-                    baseSpeed: 0.01 + Math.random() * 0.03,
-                    // 尺寸大大降低 (0.05 ~ 0.15)
-                    size: 0.05 + Math.random() * 0.1,
+                    radius: 24 + Math.random() * 35,
+                    baseSpeed: 0.002 + Math.random() * 0.006,
+                    size: 0.04 + Math.random() * 0.14,
                     angle: Math.random() * Math.PI * 2,
-                    // 形状随机因子
-                    shapeIdx: Math.floor(Math.random() * 3)
+                    // 将范围改为 0-4，对应下面 5 种更复杂的几何体逻辑
+                    shapeIdx: Math.floor(Math.random() * 5)
                 });
             }
 
-            const allAsteroids = [...namedAsteroids, ...extraAsteroids];
-
-            // 更新UI
-            const countDisplay = document.getElementById('asteroid-count');
-            if(countDisplay) countDisplay.textContent = `2 + ${extraCount} (复杂形态)`;
+            document.getElementById('asteroid-count').textContent = `2 + ${extraCount} (多维轨道)`;
 
             allAsteroids.forEach(data => {
                 let geometry;
 
                 if (data.text) {
-                     // 命名行星稍微圆润一点
-                     geometry = new THREE.DodecahedronGeometry(data.size, 0);
+                    // 命名行星保持稍微圆润的十二面体
+                    geometry = new THREE.DodecahedronGeometry(data.size, 0);
                 } else {
-                    // 背景小行星：使用更复杂的几何体
+                    // 背景碎石：去除四面体，增加细分度(detail)使形状更碎裂、复杂
                     if (data.shapeIdx === 0) {
-                        // 二十面体 (看起来像圆石)
+                        // 二十面体 (原始形态)
                         geometry = new THREE.IcosahedronGeometry(data.size, 0);
                     } else if (data.shapeIdx === 1) {
-                        // 十二面体 (块状)
-                        geometry = new THREE.DodecahedronGeometry(data.size, 0);
+                        // 二十面体 (增加 1 级细分，产生更多碎裂面，看起来像更复杂的矿石)
+                        geometry = new THREE.IcosahedronGeometry(data.size, 1);
+                    } else if (data.shapeIdx === 2) {
+                        // 十二面体 (增加 1 级细分)
+                        geometry = new THREE.DodecahedronGeometry(data.size, 1);
+                    } else if (data.shapeIdx === 3) {
+                        // 八面体 (增加 1 级细分)
+                        geometry = new THREE.OctahedronGeometry(data.size, 1);
                     } else {
-                        // 八面体 (尖锐)
-                        geometry = new THREE.OctahedronGeometry(data.size, 0);
+                        // 低段数球体：(由于非均匀缩放，会产生像鹅卵石或陨石核心的平滑不规则形状)
+                        geometry = new THREE.SphereGeometry(data.size, 5, 4);
                     }
                 }
 
-                // 颜色变化
-                const grayness = 0.4 + Math.random() * 0.4;
+                // 提示：下方的 mesh.scale.set 非均匀缩放逻辑请务必保留，
+                // 它是让这些复杂几何体真正变成“岩石”而不只是“数学多面体”的关键。
                 const material = new THREE.MeshLambertMaterial({
-                    color: new THREE.Color().setHSL(0.08, 0.2, grayness),
-                    flatShading: true
+                    color: new THREE.Color().setHSL(0.08, 0.15, 0.35 + Math.random() * 0.4),
+                    flatShading: true // 开启平面着色，增强岩石的棱角感
                 });
 
                 const mesh = new THREE.Mesh(geometry, material);
 
-                // --- 关键：非均匀缩放，模拟不规则岩石形状 ---
-                // 例如：拉长 x 轴，压扁 y 轴
+                // --- 复杂形态核心：应用非均匀缩放使其呈现岩石块状 ---
                 if (!data.text) {
                     mesh.scale.set(
-                        0.8 + Math.random() * 0.5,
-                        0.8 + Math.random() * 0.5,
-                        0.8 + Math.random() * 0.5
+                        0.7 + Math.random() * 0.9,
+                        0.7 + Math.random() * 0.9,
+                        0.7 + Math.random() * 0.9
                     );
                 }
 
                 if (data.text) {
-                    const map = createTextTexture(data.text);
-                    const spriteMaterial = new THREE.SpriteMaterial({
-                        map: map, transparent: true, depthTest: false
-                    });
-                    const sprite = new THREE.Sprite(spriteMaterial);
-                    sprite.scale.set(8, 4, 1); // 文字也稍微调小
-                    sprite.position.y = data.size * 3.0;
+                    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+                        map: createTextTexture(data.text), transparent: true, depthTest: false
+                    }));
+                    sprite.scale.set(8, 4, 1);
+                    sprite.position.y = data.size * 3.5;
                     mesh.add(sprite);
                 }
 
-                // --- 复杂的轨道参数 ---
                 mesh.userData = {
-                    // 椭圆轨道参数：长半轴 a 和 短半轴 b
-                    // 让轨道稍微有点偏心率
-                    semiMajorAxis: data.radius * (1.0 + Math.random() * 0.1),
-                    semiMinorAxis: data.radius * (0.9 + Math.random() * 0.1),
-
+                    semiMajorAxis: data.radius * (1.0 + Math.random() * 0.2),
+                    semiMinorAxis: data.radius * (0.8 + Math.random() * 0.2),
                     orbitSpeed: data.baseSpeed,
                     currentAngle: data.angle,
-
-                    // 自转速度
-                    rotSpeedX: 0.002 + Math.random() * 0.01,
-                    rotSpeedY: 0.002 + Math.random() * 0.01,
-
-                    // 垂直波动 (Y轴正弦波运动)
-                    // 让小行星在公转时上下浮动
-                    wobbleSpeed: 1.0 + Math.random() * 2.0, // 波动频率
-                    wobbleHeight: (Math.random() - 0.5) * 1.5, // 波动幅度
-                    yOffset: (Math.random() - 0.5) * 1.0 // 基础高度偏移
+                    // 轨道倾角：不再只是平面，而是有随机倾斜角度
+                    inclination: (Math.random() - 0.5) * 0.4,
+                    rotSpeedX: 0.001 + Math.random() * 0.005,
+                    rotSpeedY: 0.001 + Math.random() * 0.005,
+                    wobbleSpeed: 0.5 + Math.random() * 1.5,
+                    wobbleHeight: (Math.random() - 0.5) * 2.5,
+                    yOffset: (Math.random() - 0.5) * 2.0
                 };
 
                 asteroidTransformGroup.add(mesh);
@@ -677,7 +704,7 @@
             }
 
             let lerpFactor = 0.05;
-            if (!isHandDetected) {
+            if (!isHandDetected && !isMouseActive) {
                 lerpFactor = 0.01;
                 autoIdleTime += 0.005;
                 if(autoIdleTime > 20 * Math.PI) autoIdleTime = 0;
@@ -687,7 +714,8 @@
                 statusElement.style.color = "#666";
             } else {
                 lerpFactor = 0.15;
-                statusElement.innerHTML = "系统状态: 手动接管<br>输入信号: <span class='highlight'>已锁定</span>";
+                const source = isHandDetected ? "视觉控制" : "鼠标控制";
+                statusElement.innerHTML = `系统状态: 手动接管<br>输入信号: <span class='highlight'>${source}已锁定</span>`;
                 statusElement.style.color = "#c5a059";
             }
 
@@ -699,30 +727,31 @@
             uniforms.uRotationX.value = currentRotX;
             uniforms.uRotationY.value = currentRotY;
 
-            // 更新小行星
             if (asteroidTransformGroup) {
                 asteroidTransformGroup.scale.set(currentScale, currentScale, currentScale);
                 asteroidTransformGroup.rotation.x = currentRotX;
                 asteroidTransformGroup.rotation.y = currentRotY;
             }
 
+            // 更新小行星逻辑 (包含复杂轨迹计算)
             if (asteroids.length > 0) {
                 asteroids.forEach(mesh => {
                     const data = mesh.userData;
-
-                    // --- 复杂的轨迹更新 ---
-
-                    // 1. 公转角度更新
                     data.currentAngle += data.orbitSpeed * 0.01;
 
-                    // 2. 椭圆轨道计算 (x = a*cos, z = b*sin)
-                    mesh.position.x = Math.cos(data.currentAngle) * data.semiMajorAxis;
-                    mesh.position.z = Math.sin(data.currentAngle) * data.semiMinorAxis;
+                    // 计算基础椭圆坐标
+                    const xBase = Math.cos(data.currentAngle) * data.semiMajorAxis;
+                    const zBase = Math.sin(data.currentAngle) * data.semiMinorAxis;
 
-                    // 3. 垂直波动 (在 Y 轴上叠加一个正弦波)
-                    mesh.position.y = data.yOffset + Math.sin(data.currentAngle * data.wobbleSpeed) * data.wobbleHeight;
+                    // --- 复杂轨迹修改：引入轨道倾角计算 ---
+                    mesh.position.x = xBase;
+                    mesh.position.z = zBase;
 
-                    // 4. 自转
+                    // Y坐标 = 基础偏移 + 垂直波动频率 + 轨道倾角带来的高度差
+                    const orbitInclinationY = xBase * data.inclination;
+                    mesh.position.y = data.yOffset + orbitInclinationY + Math.sin(data.currentAngle * data.wobbleSpeed) * data.wobbleHeight;
+
+                    // 自转更新
                     mesh.rotation.x += data.rotSpeedX;
                     mesh.rotation.y += data.rotSpeedY;
                 });
@@ -731,38 +760,36 @@
             renderer.render(scene, camera);
         }
 
-        // 配置手势检测参数
         const hands = new Hands({locateFile: (file) => `https://fastly.jsdelivr.net/npm/@mediapipe/hands/${file}`});
         hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.7, minTrackingConfidence: 0.7 });
         hands.onResults(onResults);
 
-        let hand = null;
-
         function onResults(results) {
             loadingElement.style.display = 'none';
             if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-                isHandDetected = true; hand = results.multiHandLandmarks[0];
-                const smoothedHand = gestureSmoother.smoothLandmarks(hand);
+                isHandDetected = true;
+                const rawHand = results.multiHandLandmarks[0];
+                const smoothedHand = gestureSmoother.smoothLandmarks(rawHand);
                 const p1 = smoothedHand[4]; const p2 = smoothedHand[8];
                 const dist = Math.sqrt((p1.x-p2.x)**2 + (p1.y-p2.y)**2);
 
                 const normDist = Math.max(0, Math.min(1, (dist - 0.02) / 0.25));
-                targetScale = 0.15 + normDist * 2.35;
+                const hScale = 0.15 + normDist * 2.35;
                 const y = smoothedHand[9].y; const normY = Math.max(0, Math.min(1, (y - 0.1) / 0.8));
-                targetRotX = -0.6 + normY * 1.6;
+                const hRotX = -0.6 + normY * 1.6;
                 const x = smoothedHand[9].x; const normX = Math.max(0, Math.min(1, (x - 0.1) / 0.7));
-                targetRotY = -Math.PI/2 + normX * Math.PI;
-                const smoothedParams = gestureSmoother.smoothGestureParams({ zoom: targetScale, rotationX: targetRotX, rotationY: targetRotY });
+                const hRotY = -Math.PI/2 + normX * Math.PI;
+
+                const smoothedParams = gestureSmoother.smoothGestureParams({ zoom: hScale, rotationX: hRotX, rotationY: hRotY });
                 targetScale = smoothedParams.zoom; targetRotX = smoothedParams.rotationX; targetRotY = smoothedParams.rotationY;
             } else {
                 isHandDetected = false; gestureSmoother.reset();
             }
         }
 
-        const CAMERA_WIDTH = 640; const CAMERA_HEIGHT = 480;
         const cameraUtils = new Camera(videoElement, {
             onFrame: async () => { await hands.send({image: videoElement}); },
-            width: CAMERA_WIDTH, height: CAMERA_HEIGHT
+            width: 640, height: 480
         });
         cameraUtils.start().catch(e => { console.error(e); loadingElement.innerText = "摄像头启动失败"; });
 
